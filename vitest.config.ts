@@ -17,7 +17,10 @@ export default defineConfig({
       return {
         wrangler: { configPath: "./wrangler.jsonc" },
         miniflare: {
-          bindings: { TEST_MIGRATIONS: migrations },
+          bindings: {
+            GKD_API_AUTH_TOKEN: "test-gkd-api-auth-token",
+            TEST_MIGRATIONS: migrations,
+          },
         },
       };
     }),

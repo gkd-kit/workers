@@ -5,6 +5,7 @@
   "compatibility_date": "2026-08-19",
   "workers_dev": true,
   "send_metrics": false,
+  "keep_vars": true,
   "observability": {
     "enabled": true
   },

@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { methodNotAllowed } from "hono/method-not-allowed";
+import { assertAuthorization } from "./auth";
 import { createBuildAsset, getBuildAsset } from "./build-asset";
 import { ApiError } from "./errors";
 import { handleProxy } from "./proxy";
@@ -12,7 +13,9 @@ import {
 } from "./snapshot-detect";
 
 type HonoEnv = {
-  Bindings: Env;
+  Bindings: Env & {
+    GKD_API_AUTH_TOKEN?: string;
+  };
 };
 
 const app = new Hono<HonoEnv>();
@@ -40,6 +43,7 @@ app.use(
     allowHeaders: [
       "Accept",
       "Accept-Language",
+      "Authorization",
       "Content-Type",
       "Range",
       "If-None-Match",
@@ -102,11 +106,15 @@ app.get("/build-asset/getBuildAsset", async (context) =>
     headers: NO_STORE_HEADERS,
   }),
 );
-app.post("/build-asset/createBuildAsset", async (context) =>
-  context.json(await createBuildAsset(context.req.raw, context.env.DB), {
+app.post("/build-asset/createBuildAsset", async (context) => {
+  assertAuthorization(
+    context.req.raw,
+    context.env.GKD_API_AUTH_TOKEN,
+  );
+  return context.json(await createBuildAsset(context.req.raw, context.env.DB), {
     headers: NO_STORE_HEADERS,
-  }),
-);
+  });
+});
 app.get("/proxy", (context) => handleProxy(context.req.raw, context.env));
 
 app.notFound((context) =>

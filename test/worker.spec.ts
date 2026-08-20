@@ -3,6 +3,8 @@ import { strToU8, zipSync } from "fflate";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import app from "../src/index";
 
+const GKD_API_AUTH_TOKEN = "test-gkd-api-auth-token";
+
 const makeSnapshotZip = (id: number): Uint8Array => {
   return zipSync(
     {
@@ -38,12 +40,18 @@ const postBuildAsset = (
   body: BodyInit,
   contentType?: string,
   query = "",
+  authorization: string | null = `Bearer ${GKD_API_AUTH_TOKEN}`,
 ): Promise<Response> => {
+  const headers = new Headers();
+  if (contentType) headers.set("Content-Type", contentType);
+  if (authorization !== null) {
+    headers.set("Authorization", authorization);
+  }
   return exports.default.fetch(
     `https://worker.test/build-asset/createBuildAsset${query}`,
     {
       method: "POST",
-      ...(contentType ? { headers: { "Content-Type": contentType } } : {}),
+      headers,
       body,
     },
   );
@@ -68,13 +76,23 @@ describe("routing and CORS", () => {
     expect(unknownApi.status).toBe(200);
 
     const preflight = await exports.default.fetch(
-      "https://worker.test/proxy",
-      { method: "OPTIONS" },
+      "https://worker.test/build-asset/createBuildAsset",
+      {
+        method: "OPTIONS",
+        headers: {
+          Origin: "https://client.test",
+          "Access-Control-Request-Headers": "Authorization, Content-Type",
+          "Access-Control-Request-Method": "POST",
+        },
+      },
     );
     expect(preflight.status).toBe(204);
     expect(preflight.headers.get("access-control-allow-origin")).toBe("*");
     expect(preflight.headers.get("access-control-allow-methods")).toBe(
       "GET,HEAD,POST,OPTIONS",
+    );
+    expect(preflight.headers.get("access-control-allow-headers")).toContain(
+      "Authorization",
     );
     expect(preflight.headers.get("x-content-type-options")).toBe("nosniff");
   });
@@ -239,6 +257,70 @@ describe("snapshot detection", () => {
 });
 
 describe("build assets", () => {
+  it("requires the shared bearer token before writing", async () => {
+    const malformed = await postBuildAsset(
+      "not-json",
+      "application/json",
+      "?forbidden=true",
+      null,
+    );
+    expect(malformed.status).toBe(200);
+    expect(await malformed.json()).toEqual({
+      error: true,
+      message: "Unauthorized",
+    });
+
+    for (const authorization of [
+      null,
+      "",
+      "Bearer wrong-token",
+      `Token ${GKD_API_AUTH_TOKEN}`,
+    ]) {
+      const response = await postBuildAsset(
+        JSON.stringify({ buildKey: "unauthorized", assetId: 123 }),
+        "application/json",
+        "",
+        authorization,
+      );
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        error: true,
+        message: "Unauthorized",
+      });
+    }
+
+    expect(
+      await env.DB.prepare(
+        "SELECT asset_id FROM build_asset WHERE build_key = ?",
+      )
+        .bind("unauthorized")
+        .first(),
+    ).toBeNull();
+  });
+
+  it("fails closed when the Worker token is not configured", async () => {
+    const response = await app.request(
+      "https://worker.test/build-asset/createBuildAsset",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${GKD_API_AUTH_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ buildKey: "unconfigured", assetId: 123 }),
+      },
+      {
+        DB: env.DB,
+        RATE_LIMITER: env.RATE_LIMITER,
+      },
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      error: true,
+      message: "Unauthorized",
+    });
+  });
+
   it("returns null before creation and reads a JSON-created asset", async () => {
     const missing = await exports.default.fetch(
       "https://worker.test/build-asset/getBuildAsset?buildKey=release%3A1",
