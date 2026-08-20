@@ -2,7 +2,11 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { methodNotAllowed } from "hono/method-not-allowed";
 import { assertAuthorization } from "./auth";
-import { createBuildAsset, getBuildAsset } from "./build-asset";
+import {
+  createBuildAsset,
+  getBuildAsset,
+  getBuildAssetList,
+} from "./build-asset";
 import { ApiError } from "./errors";
 import { handleProxy } from "./proxy";
 import {
@@ -103,6 +107,11 @@ app.post("/snapshot-detect/detectSnapshot", async (context) => {
 });
 app.get("/build-asset/getBuildAsset", async (context) =>
   context.json(await getBuildAsset(context.req.raw, context.env.DB), {
+    headers: NO_STORE_HEADERS,
+  }),
+);
+app.get("/build-asset/getBuildAssetList", async (context) =>
+  context.json(await getBuildAssetList(context.req.raw, context.env.DB), {
     headers: NO_STORE_HEADERS,
   }),
 );

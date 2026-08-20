@@ -11,6 +11,11 @@ type BuildAssetRow = {
   asset_id: number;
 };
 
+type BuildAssetListRow = {
+  build_key: string;
+  asset_id: number;
+};
+
 type BuildAsset = {
   buildKey: string;
   assetId: number;
@@ -20,6 +25,8 @@ export type GetBuildAssetResponse =
   | Pick<BuildAsset, "assetId">
   | null
   | ErrorResponse;
+
+export type GetBuildAssetListResponse = BuildAsset[] | ErrorResponse;
 
 export type CreateBuildAssetResponse = BuildAsset | ErrorResponse;
 
@@ -168,6 +175,28 @@ export const getBuildAsset = async (
     .bind(buildKey)
     .first<BuildAssetRow>();
   return row === null ? null : { assetId: row.asset_id };
+};
+
+export const getBuildAssetList = async (
+  request: Request,
+  database: D1Database,
+): Promise<BuildAsset[]> => {
+  if (request.body !== null) {
+    throw new ApiError("GET request body is not allowed");
+  }
+  const searchParams = new URL(request.url).searchParams;
+  if ([...searchParams].length > 0) {
+    throw new ApiError("GET query parameters are not allowed");
+  }
+  const { results } = await database
+    .prepare(
+      "SELECT build_key, asset_id FROM build_asset ORDER BY build_key",
+    )
+    .all<BuildAssetListRow>();
+  return results.map((row) => ({
+    buildKey: row.build_key,
+    assetId: row.asset_id,
+  }));
 };
 
 export const createBuildAsset = async (

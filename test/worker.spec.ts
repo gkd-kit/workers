@@ -1,6 +1,7 @@
 import { env, exports } from "cloudflare:workers";
 import { strToU8, zipSync } from "fflate";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { getBuildAssetList } from "../src/build-asset";
 import app from "../src/index";
 
 const GKD_API_AUTH_TOKEN = "test-gkd-api-auth-token";
@@ -257,6 +258,75 @@ describe("snapshot detection", () => {
 });
 
 describe("build assets", () => {
+  it("lists all build assets in build key order", async () => {
+    const empty = await exports.default.fetch(
+      "https://worker.test/build-asset/getBuildAssetList",
+    );
+    expect(empty.status).toBe(200);
+    expect(empty.headers.get("cache-control")).toBe("no-store");
+    expect(await empty.json()).toEqual([]);
+
+    await env.DB.prepare(
+      `INSERT INTO build_asset (build_key, asset_id)
+       VALUES (?, ?), (?, ?), (?, ?)`,
+    )
+      .bind("release:2", 200, "release:10", 1000, "release:1", 100)
+      .run();
+
+    const response = await exports.default.fetch(
+      "https://worker.test/build-asset/getBuildAssetList",
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual([
+      { buildKey: "release:1", assetId: 100 },
+      { buildKey: "release:10", assetId: 1000 },
+      { buildKey: "release:2", assetId: 200 },
+    ]);
+  });
+
+  it("rejects parameters from forbidden sources for the build asset list", async () => {
+    const query = await exports.default.fetch(
+      "https://worker.test/build-asset/getBuildAssetList?buildKey=release%3A1",
+    );
+    expect(query.status).toBe(200);
+    expect(await query.json()).toEqual({
+      error: true,
+      message: "GET query parameters are not allowed",
+    });
+
+    const path = await exports.default.fetch(
+      "https://worker.test/build-asset/getBuildAssetList/release%3A1",
+    );
+    expect(path.status).toBe(200);
+    expect(await path.json()).toMatchObject({ error: true });
+
+    await env.DB.prepare(
+      `INSERT INTO build_asset (build_key, asset_id)
+       VALUES (?, ?), (?, ?)`,
+    )
+      .bind("release:1", 100, "release:2", 200)
+      .run();
+    const header = await exports.default.fetch(
+      "https://worker.test/build-asset/getBuildAssetList",
+      { headers: { "X-Build-Key": "release:1" } },
+    );
+    expect(header.status).toBe(200);
+    expect(await header.json()).toEqual([
+      { buildKey: "release:1", assetId: 100 },
+      { buildKey: "release:2", assetId: 200 },
+    ]);
+
+    const requestWithBody = new Request(
+      "https://worker.test/build-asset/getBuildAssetList",
+    );
+    Object.defineProperty(requestWithBody, "body", {
+      value: new ReadableStream(),
+    });
+    await expect(getBuildAssetList(requestWithBody, env.DB)).rejects.toThrow(
+      "GET request body is not allowed",
+    );
+  });
+
   it("requires the shared bearer token before writing", async () => {
     const malformed = await postBuildAsset(
       "not-json",

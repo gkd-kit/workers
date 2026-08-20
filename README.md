@@ -9,6 +9,7 @@ Hono-based Cloudflare Worker for GKD snapshot detection, build asset lookup, and
 - `GET /snapshot-detect/detectSnapshot?id=123&importId=456` preserves the original query-string API.
 - `POST /snapshot-detect/detectSnapshot` accepts JSON `{ "id": 123, "importId": 456 }` as the write-oriented alternative. Both forms verify `snapshot.json` from the public GitHub attachment before storing the mapping in D1.
 - `GET /build-asset/getBuildAsset?buildKey=<string>` returns `{ "assetId": 123 }` or `null`.
+- `GET /build-asset/getBuildAssetList` returns every stored `{ "buildKey": "...", "assetId": 123 }` mapping ordered by `buildKey`.
 - `POST /build-asset/createBuildAsset` accepts JSON, URL-encoded form data, or multipart form data containing `buildKey` and `assetId`. It requires `Authorization: Bearer <token>`, creates or updates the D1 mapping, and returns both fields.
 - `GET /proxy?url=<encoded-github-attachment-url>` streams a rate-limited, header-filtered public GitHub ZIP attachment. It accepts current `https://github.com/user-attachments/files/<id>/<filename>.zip` links and legacy `https://github.com/gkd-kit/inspect/files/<id>/<filename>.zip` links.
 - Framework-generated `HEAD` and `OPTIONS` responses do not carry business logic. Unsupported paths, methods, and business errors return HTTP 200 JSON containing `error: true`; successful JSON APIs return their business data without a response envelope.
