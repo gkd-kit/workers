@@ -445,6 +445,15 @@ describe("build assets", () => {
 });
 
 describe("GET proxy", () => {
+  const currentAttachment =
+    "https://github.com/user-attachments/files/30034251/log-1784092724705.zip";
+  const legacyAttachment =
+    "https://github.com/gkd-kit/inspect/files/14993995/file.zip";
+  const objectDownload =
+    "https://objects.githubusercontent.com/github-production-repository-file-5c1aeb/661952005/14993995?X-Amz-Signature=test";
+  const proxyUrl = (target: string): string =>
+    `https://worker.test/proxy?url=${encodeURIComponent(target)}`;
+
   it("streams the upstream response and strips sensitive headers", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(() =>
       Promise.resolve(
@@ -460,7 +469,7 @@ describe("GET proxy", () => {
       ),
     );
     const response = await exports.default.fetch(
-      "https://worker.test/proxy?url=https%3A%2F%2Fexample.com%2Ffile",
+      proxyUrl(currentAttachment),
       { headers: { Range: "bytes=0-6", Cookie: "private=value" } },
     );
     expect(response.status).toBe(206);
@@ -474,7 +483,22 @@ describe("GET proxy", () => {
     expect(upstreamHeaders.get("cookie")).toBeNull();
   });
 
-  it("follows and revalidates redirects", async () => {
+  it("accepts current and legacy GitHub ZIP attachment URLs", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(() => Promise.resolve(new Response("attachment")));
+    for (const target of [currentAttachment, legacyAttachment]) {
+      const response = await exports.default.fetch(proxyUrl(target));
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe("attachment");
+    }
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
+      currentAttachment,
+      legacyAttachment,
+    ]);
+  });
+
+  it("follows and revalidates GitHub download redirects", async () => {
     let requestCount = 0;
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(() => {
       requestCount++;
@@ -482,17 +506,19 @@ describe("GET proxy", () => {
         requestCount === 1
           ? new Response(null, {
               status: 302,
-              headers: { Location: "https://cdn.example.com/final" },
+              headers: { Location: objectDownload },
             })
           : new Response("done"),
       );
     });
-    const response = await exports.default.fetch(
-      "https://worker.test/proxy?url=https%3A%2F%2Fexample.com%2Fstart",
-    );
+    const response = await exports.default.fetch(proxyUrl(legacyAttachment));
     expect(response.status).toBe(200);
     expect(await response.text()).toBe("done");
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
+      legacyAttachment,
+      objectDownload,
+    ]);
   });
 
   it("rejects redirects to unsafe targets", async () => {
@@ -504,26 +530,59 @@ describe("GET proxy", () => {
         }),
       ),
     );
-    const response = await exports.default.fetch(
-      "https://worker.test/proxy?url=https%3A%2F%2Fexample.com%2Fstart",
-    );
+    const response = await exports.default.fetch(proxyUrl(currentAttachment));
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ error: true });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects unsafe targets before fetching", async () => {
+  it("rejects non-attachment targets before fetching", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch");
     for (const target of [
-      "http://example.com",
+      "https://example.com/file.zip",
+      "https://f.gkd.li/14993995",
+      "https://raw.githubusercontent.com/gkd-kit/inspect/main/file.zip",
+      "https://github.com/gkd-kit/inspect/releases/download/v1/file.zip",
+      "https://github.com/user-attachments/assets/89796d25-b360-4486-9cf7-79a5e598022c",
+      "https://github.com/user-attachments/files/not-a-number/file.zip",
+      "https://github.com/user-attachments/files/123/path/file.zip",
+      "https://github.com/user-attachments/files/123/file.txt",
+      "https://github.com/user-attachments/files/123/file.zip?download=1",
+      "https://github.com/user-attachments/files/123/file.zip#fragment",
+      "https://github.com/user-attachments/files/123/log%2Fsecret.zip",
+      "https://github.com/user-attachments/files/123/log%252Fsecret.zip",
+      objectDownload,
+      "http://github.com/user-attachments/files/123/file.zip",
       "https://127.0.0.1/data",
       "https://localhost/data",
       "https://worker.test/proxy",
-      "https://user:pass@example.com/data",
+      "https://user:pass@github.com/user-attachments/files/123/file.zip",
+      "https://github.com:444/user-attachments/files/123/file.zip",
     ]) {
-      const response = await exports.default.fetch(
-        `https://worker.test/proxy?url=${encodeURIComponent(target)}`,
-      );
+      const response = await exports.default.fetch(proxyUrl(target));
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ error: true });
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts url only from exactly one query parameter", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    const requests = [
+      new Request("https://worker.test/proxy", {
+        headers: { "X-Url": currentAttachment },
+      }),
+      new Request(
+        `https://worker.test/proxy?url=${encodeURIComponent(currentAttachment)}&url=${encodeURIComponent(legacyAttachment)}`,
+      ),
+      new Request("https://worker.test/proxy", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: currentAttachment }),
+      }),
+    ];
+    for (const request of requests) {
+      const response = await exports.default.fetch(request);
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({ error: true });
     }
@@ -533,7 +592,7 @@ describe("GET proxy", () => {
   it("returns a JSON error when the native limiter rejects the request", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch");
     const response = await app.request(
-      "https://worker.test/proxy?url=https%3A%2F%2Fexample.com%2Ffile",
+      proxyUrl(currentAttachment),
       undefined,
       {
         RATE_LIMITER: {

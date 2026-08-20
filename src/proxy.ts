@@ -3,6 +3,14 @@ import { ApiError } from "./errors";
 const MAX_REDIRECTS = 5;
 const MAX_KNOWN_RESPONSE_SIZE = 32 * 1024 * 1024;
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+const GITHUB_HOSTNAME = "github.com";
+const GITHUB_OBJECTS_HOSTNAME = "objects.githubusercontent.com";
+const GITHUB_ATTACHMENT_PATHS = [
+  /^\/user-attachments\/files\/([1-9][0-9]*)\/([^/]+)$/,
+  /^\/gkd-kit\/inspect\/files\/([1-9][0-9]*)\/([^/]+)$/,
+] as const;
+const GITHUB_OBJECT_PATH =
+  /^\/github-production-repository-file-[0-9a-f]+\/[1-9][0-9]*\/[1-9][0-9]*$/;
 const REQUEST_HEADER_ALLOWLIST = [
   "accept",
   "accept-language",
@@ -33,7 +41,7 @@ const isIpv4Hostname = (hostname: string): boolean => {
   );
 };
 
-const validateTarget = (target: URL, workerHostname: string): URL => {
+const validateHttpsTarget = (target: URL, workerHostname: string): URL => {
   if (target.protocol !== "https:") {
     throw new ApiError("Only HTTPS URLs are allowed");
   }
@@ -61,8 +69,70 @@ const validateTarget = (target: URL, workerHostname: string): URL => {
     throw new ApiError("The target hostname is not allowed");
   }
   target.hostname = hostname;
-  target.hash = "";
   return target;
+};
+
+const isAllowedGithubAttachmentPath = (pathname: string): boolean => {
+  const match = GITHUB_ATTACHMENT_PATHS.map((pattern) =>
+    pathname.match(pattern),
+  ).find((value) => value !== null);
+  if (!match) return false;
+  const filenameSegment = match[2];
+  if (!filenameSegment) return false;
+  let filename: string;
+  try {
+    filename = decodeURIComponent(filenameSegment);
+  } catch {
+    return false;
+  }
+  return (
+    filename.length > 0 &&
+    !filename.includes("/") &&
+    !filename.includes("\\") &&
+    !filename.includes("\0") &&
+    !/%(?:2f|5c|00)/i.test(filename) &&
+    filename.toLowerCase().endsWith(".zip")
+  );
+};
+
+const validateInitialTarget = (
+  target: URL,
+  workerHostname: string,
+): URL => {
+  target = validateHttpsTarget(target, workerHostname);
+  if (
+    target.hostname !== GITHUB_HOSTNAME ||
+    target.search.length > 0 ||
+    target.hash.length > 0 ||
+    !isAllowedGithubAttachmentPath(target.pathname)
+  ) {
+    throw new ApiError("Only GitHub ZIP attachment URLs are allowed");
+  }
+  return target;
+};
+
+const validateRedirectTarget = (
+  target: URL,
+  workerHostname: string,
+): URL => {
+  target = validateHttpsTarget(target, workerHostname);
+  if (target.hash.length > 0) {
+    throw new ApiError("The redirect target is not allowed");
+  }
+  if (
+    target.hostname === GITHUB_HOSTNAME &&
+    target.search.length === 0 &&
+    isAllowedGithubAttachmentPath(target.pathname)
+  ) {
+    return target;
+  }
+  if (
+    target.hostname === GITHUB_OBJECTS_HOSTNAME &&
+    GITHUB_OBJECT_PATH.test(target.pathname)
+  ) {
+    return target;
+  }
+  throw new ApiError("The redirect target is not allowed");
 };
 
 const createUpstreamHeaders = (request: Request): Headers => {
@@ -97,7 +167,7 @@ const fetchWithValidatedRedirects = async (
     if (redirectCount === MAX_REDIRECTS) {
       throw new ApiError("The upstream URL redirected too many times");
     }
-    target = validateTarget(new URL(location, target), workerHostname);
+    target = validateRedirectTarget(new URL(location, target), workerHostname);
   }
   throw new ApiError("The upstream URL redirected too many times");
 };
@@ -135,7 +205,7 @@ export const handleProxy = async (
   }
   let target: URL;
   try {
-    target = validateTarget(new URL(targetValues[0]), requestUrl.hostname);
+    target = validateInitialTarget(new URL(targetValues[0]), requestUrl.hostname);
   } catch (error) {
     if (error instanceof ApiError) throw error;
     throw new ApiError("url must be an absolute URL");
